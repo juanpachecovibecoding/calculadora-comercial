@@ -38,6 +38,53 @@ export const CustomersManagement: React.FC<CustomersManagementProps> = ({
   const [paymentAmount, setPaymentAmount] = useState('');
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
+  // --- ANDROID / BROWSER NATIVE BACK BUTTON INTEGRATION ---
+  const custStateRef = React.useRef({
+    selectedCustomer,
+    showCreateModal,
+    showPaymentModal
+  });
+
+  React.useEffect(() => {
+    custStateRef.current = {
+      selectedCustomer,
+      showCreateModal,
+      showPaymentModal
+    };
+  }, [selectedCustomer, showCreateModal, showPaymentModal]);
+
+  React.useEffect(() => {
+    if (selectedCustomer || showCreateModal || showPaymentModal) {
+      window.history.pushState({ custSubNav: true }, '');
+    }
+  }, [selectedCustomer, showCreateModal, showPaymentModal]);
+
+  React.useEffect(() => {
+    const handlePopState = () => {
+      const state = custStateRef.current;
+      if (state.showPaymentModal) {
+        setShowPaymentModal(false);
+        window.history.pushState({ custSubNav: true }, '');
+        return;
+      }
+      if (state.showCreateModal) {
+        setShowCreateModal(false);
+        window.history.pushState({ custSubNav: true }, '');
+        return;
+      }
+      if (state.selectedCustomer) {
+        setSelectedCustomer(null);
+        window.history.pushState({ custSubNav: true }, '');
+        return;
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
   // Filtrar clientes por búsqueda
   const filteredCustomers = customers.filter(c => 
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||

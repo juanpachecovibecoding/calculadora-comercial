@@ -42,6 +42,53 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onLogo
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
+  // --- ANDROID / BROWSER NATIVE BACK BUTTON INTEGRATION ---
+  const adminStateRef = React.useRef({
+    showCreateModal,
+    showEditModal,
+    businessToDelete
+  });
+
+  React.useEffect(() => {
+    adminStateRef.current = {
+      showCreateModal,
+      showEditModal,
+      businessToDelete
+    };
+  }, [showCreateModal, showEditModal, businessToDelete]);
+
+  React.useEffect(() => {
+    if (showCreateModal || showEditModal || businessToDelete) {
+      window.history.pushState({ superadminModalNav: true }, '');
+    }
+  }, [showCreateModal, showEditModal, businessToDelete]);
+
+  React.useEffect(() => {
+    const handlePopState = () => {
+      const state = adminStateRef.current;
+      if (state.businessToDelete) {
+        setBusinessToDelete(null);
+        window.history.pushState({ superadminModalNav: true }, '');
+        return;
+      }
+      if (state.showEditModal) {
+        setShowEditModal(false);
+        window.history.pushState({ superadminModalNav: true }, '');
+        return;
+      }
+      if (state.showCreateModal) {
+        setShowCreateModal(false);
+        window.history.pushState({ superadminModalNav: true }, '');
+        return;
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
   // Cargar lista de comercios
   const fetchBusinesses = React.useCallback(async () => {
     try {

@@ -113,6 +113,134 @@ const App: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // --- ANDROID / BROWSER NATIVE BACK BUTTON INTEGRATION ---
+  // Mantiene el estado en history para interceptar el botón "Atrás" de Android / Navegador
+  // evitando que cierre la app o la PWA instalada cuando el usuario está navegando vistas o modales.
+  const isCurrentAdmin = user?.role === 'business_admin' || (user?.role as any) === 'admin';
+
+  const appStateRef = useRef({
+    view,
+    showPaymentModal,
+    showLibretaModal,
+    showCreateSellerModal,
+    showEditSellerModal,
+    showChangePasswordModal,
+    showThemeMenu,
+    isCurrentAdmin: false
+  });
+
+  useEffect(() => {
+    appStateRef.current = {
+      view,
+      showPaymentModal,
+      showLibretaModal,
+      showCreateSellerModal,
+      showEditSellerModal,
+      showChangePasswordModal,
+      showThemeMenu,
+      isCurrentAdmin
+    };
+  }, [
+    view,
+    showPaymentModal,
+    showLibretaModal,
+    showCreateSellerModal,
+    showEditSellerModal,
+    showChangePasswordModal,
+    showThemeMenu,
+    isCurrentAdmin
+  ]);
+
+  // Push state en window.history para que siempre haya un registro al cual volver
+  const isPoppingRef = useRef(false);
+
+  useEffect(() => {
+    if (view === 'login') return;
+
+    if (!isPoppingRef.current) {
+      window.history.pushState({ appNav: true, view, time: Date.now() }, '');
+    }
+    isPoppingRef.current = false;
+  }, [
+    view,
+    showPaymentModal,
+    showLibretaModal,
+    showCreateSellerModal,
+    showEditSellerModal,
+    showChangePasswordModal
+  ]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const state = appStateRef.current;
+
+      // 1. Si algún modal o menú está abierto, cerrarlo primero
+      if (state.showThemeMenu) {
+        setShowThemeMenu(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+      if (state.showPaymentModal) {
+        setShowPaymentModal(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+      if (state.showLibretaModal) {
+        setShowLibretaModal(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+      if (state.showCreateSellerModal) {
+        setShowCreateSellerModal(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+      if (state.showEditSellerModal) {
+        setShowEditSellerModal(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+      if (state.showChangePasswordModal) {
+        setShowChangePasswordModal(false);
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+
+      // 2. Si estamos en una vista secundaria, retroceder a la correspondiente
+      if (state.view === 'customers') {
+        isPoppingRef.current = true;
+        setView('seller_select');
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+
+      if (state.view === 'sales_log') {
+        isPoppingRef.current = true;
+        if (state.isCurrentAdmin) {
+          setView('seller_select');
+        } else {
+          setView('calculator');
+        }
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+
+      if (state.view === 'seller_select') {
+        isPoppingRef.current = true;
+        setView('calculator');
+        window.history.pushState({ appNav: true }, '');
+        return;
+      }
+
+      // En vista raíz (calculator o login), se permite la salida de la PWA
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
 
   // --- USER PROFILE HELPER ---
   const loadUserProfile = useCallback(async (uid: string, fallbackEmail: string) => {
@@ -550,8 +678,6 @@ const App: React.FC = () => {
     setSelectedSellerFilter(null);
     setView('login');
   };
-
-  const isCurrentAdmin = user?.role === 'business_admin' || (user?.role as any) === 'admin';
 
   const handleProfileClick = () => {
       if (isCurrentAdmin) {
