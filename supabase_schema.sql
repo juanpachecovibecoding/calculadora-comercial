@@ -124,6 +124,95 @@ RETURNS UUID AS $$
   SELECT business_id FROM public.profiles WHERE id = auth.uid();
 $$ LANGUAGE sql SECURITY DEFINER SET search_path = public STABLE;
 
+-- Función para que el Superadmin actualice las credenciales del Administrador de un comercio
+CREATE OR REPLACE FUNCTION public.update_business_admin_credentials(
+  p_business_id UUID,
+  p_new_username TEXT,
+  p_new_name TEXT,
+  p_new_password TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+  v_admin_id UUID;
+  v_biz_code TEXT;
+  v_new_email TEXT;
+BEGIN
+  -- 1. Verificar permisos de superadmin
+  IF NOT public.is_superadmin() THEN
+    RAISE EXCEPTION 'Solo el superadministrador puede modificar los datos del administrador.';
+  END IF;
+
+  -- 2. Obtener el código del comercio
+  SELECT code INTO v_biz_code FROM public.businesses WHERE id = p_business_id;
+  IF v_biz_code IS NULL THEN
+    RAISE EXCEPTION 'Comercio no encontrado.';
+  END IF;
+
+  -- 3. Obtener el id del admin del comercio
+  SELECT id INTO v_admin_id 
+  FROM public.profiles 
+  WHERE business_id = p_business_id AND role = 'business_admin'
+  LIMIT 1;
+
+  IF v_admin_id IS NULL THEN
+    RAISE EXCEPTION 'No se encontró un perfil de administrador para este comercio.';
+  END IF;
+
+  -- 4. Construir el email virtual correspondiente
+  v_new_email := LOWER(TRIM(p_new_username)) || '@' || LOWER(TRIM(v_biz_code)) || '.local';
+
+  -- 5. Actualizar en auth.users si se pasó contraseña nueva o cambió email
+  IF p_new_password IS NOT NULL AND LENGTH(TRIM(p_new_password)) >= 6 THEN
+    UPDATE auth.users
+    SET 
+      email = v_new_email,
+      encrypted_password = crypt(p_new_password, gen_salt('bf')),
+      raw_user_meta_data = jsonb_set(
+        jsonb_set(
+          COALESCE(raw_user_meta_data, '{}'::jsonb),
+          '{username}',
+          to_jsonb(LOWER(TRIM(p_new_username)))
+        ),
+        '{name}',
+        to_jsonb(TRIM(p_new_name))
+      ),
+      updated_at = NOW()
+    WHERE id = v_admin_id;
+  ELSE
+    UPDATE auth.users
+    SET 
+      email = v_new_email,
+      raw_user_meta_data = jsonb_set(
+        jsonb_set(
+          COALESCE(raw_user_meta_data, '{}'::jsonb),
+          '{username}',
+          to_jsonb(LOWER(TRIM(p_new_username)))
+        ),
+        '{name}',
+        to_jsonb(TRIM(p_new_name))
+      ),
+      updated_at = NOW()
+    WHERE id = v_admin_id;
+  END IF;
+
+  -- 6. Actualizar en public.profiles
+  UPDATE public.profiles
+  SET 
+    username = LOWER(TRIM(p_new_username)),
+    name = TRIM(p_new_name),
+    email = v_new_email
+  WHERE id = v_admin_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'admin_id', v_admin_id,
+    'username', LOWER(TRIM(p_new_username)),
+    'name', TRIM(p_new_name),
+    'email', v_new_email
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Función para que el Superadmin elimine un comercio y todos sus usuarios asociados en auth.users
 CREATE OR REPLACE FUNCTION public.delete_business(p_business_id UUID)
 RETURNS VOID AS $$

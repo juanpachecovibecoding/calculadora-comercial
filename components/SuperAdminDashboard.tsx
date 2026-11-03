@@ -34,7 +34,13 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onLogo
   const [editName, setEditName] = useState('');
   const [editPlan, setEditPlan] = useState<BusinessPlan>('estandar');
   const [editMaxSellers, setEditMaxSellers] = useState(5);
+
+  // Datos del Administrador del Comercio (en edición)
+  const [editAdminId, setEditAdminId] = useState<string | null>(null);
+  const [editAdminUsername, setEditAdminUsername] = useState('');
+  const [editAdminName, setEditAdminName] = useState('');
   const [editAdminPassword, setEditAdminPassword] = useState('');
+  const [loadingAdminProfile, setLoadingAdminProfile] = useState(false);
 
   // Modal Eliminar Comercio
   const [businessToDelete, setBusinessToDelete] = useState<Business | null>(null);
@@ -260,15 +266,55 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onLogo
     }
   };
 
-  // Abrir modal de edición
-  const openEditModal = (biz: Business) => {
+  // Abrir modal de edición y cargar datos del negocio y de su administrador
+  const openEditModal = async (biz: Business) => {
     setEditingBiz(biz);
     setEditName(biz.name);
     setEditPlan(biz.plan);
     setEditMaxSellers(biz.maxSellers);
+    setEditAdminId(null);
+    setEditAdminUsername('');
+    setEditAdminName('');
     setEditAdminPassword('');
     setModalError('');
     setShowEditModal(true);
+
+    // Cargar perfil del Administrador del Comercio
+    try {
+      setLoadingAdminProfile(true);
+      const { data: adminProf, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('business_id', biz.id)
+        .eq('role', 'business_admin')
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (adminProf) {
+        setEditAdminId(adminProf.id);
+        setEditAdminUsername(adminProf.username || adminProf.email?.split('@')[0] || 'admin');
+        setEditAdminName(adminProf.name || '');
+      } else {
+        // Si no se encontró admin específico, buscar cualquier perfil de ese negocio
+        const { data: anyProf } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('business_id', biz.id)
+          .limit(1)
+          .maybeSingle();
+
+        if (anyProf) {
+          setEditAdminId(anyProf.id);
+          setEditAdminUsername(anyProf.username || 'admin');
+          setEditAdminName(anyProf.name || '');
+        }
+      }
+    } catch (err) {
+      console.error('Error cargando administrador del comercio:', err);
+    } finally {
+      setLoadingAdminProfile(false);
+    }
   };
 
   // Guardar cambios de edición
@@ -291,26 +337,46 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onLogo
 
       if (updateError) throw updateError;
 
-      // 2. Si se ingresó una nueva contraseña para el admin del negocio:
-      if (editAdminPassword.trim()) {
-        if (editAdminPassword.length < 6) {
-          throw new Error('La nueva contraseña debe tener al menos 6 caracteres.');
-        }
-        // Buscar el UID del admin del negocio
-        const { data: adminProf } = await supabase
-          .from('profiles')
-          .select('id, email')
-          .eq('business_id', editingBiz.id)
-          .eq('role', 'business_admin')
-          .maybeSingle();
+      // 2. Si se editaron datos del Administrador del Comercio
+      const cleanAdminUser = editAdminUsername.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      const cleanAdminName = editAdminName.trim();
 
-        if (adminProf) {
-          // Usar la función de admin de Supabase o informar
-          alert(`Para cambiar la clave del admin (${adminProf.email}), indícale al usuario ingresar con clave provisoria o reseteo.`);
+      if (cleanAdminUser) {
+        if (editAdminPassword.trim() && editAdminPassword.trim().length < 6) {
+          throw new Error('La nueva contraseña del administrador debe tener al menos 6 caracteres.');
+        }
+
+        // Intentar llamar a la función RPC de Supabase update_business_admin_credentials
+        const { error: rpcError } = await supabase.rpc('update_business_admin_credentials', {
+          p_business_id: editingBiz.id,
+          p_new_username: cleanAdminUser,
+          p_new_name: cleanAdminName || `Admin ${editName.trim()}`,
+          p_new_password: editAdminPassword.trim() || null
+        });
+
+        if (rpcError) {
+          console.warn('RPC update_business_admin_credentials no disponible o falló, aplicando actualización directa en profiles:', rpcError);
+          // Fallback directo a profiles si aún no ejecutó la función en Supabase
+          const virtualEmail = buildVirtualEmail(cleanAdminUser, editingBiz.code);
+          const updateData: any = {
+            username: cleanAdminUser,
+            name: cleanAdminName || `Admin ${editName.trim()}`,
+            email: virtualEmail
+          };
+
+          if (editAdminId) {
+            await supabase.from('profiles').update(updateData).eq('id', editAdminId);
+          } else {
+            await supabase.from('profiles').update(updateData).eq('business_id', editingBiz.id).eq('role', 'business_admin');
+          }
+
+          if (editAdminPassword.trim()) {
+            alert('Los datos del administrador fueron actualizados. Para que la nueva contraseña tenga efecto en auth, ejecuta la función SQL provista en Supabase.');
+          }
         }
       }
 
-      alert('Comercio actualizado correctamente.');
+      alert('Comercio y datos del administrador actualizados correctamente.');
       setShowEditModal(false);
       fetchBusinesses();
     } catch (err: any) {
@@ -785,6 +851,61 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onLogo
                   onChange={(e) => setEditMaxSellers(parseInt(e.target.value) || 1)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
                 />
+              </div>
+
+              {/* SECCIÓN: EDITAR ADMINISTRADOR DEL COMERCIO */}
+              <div className="border-t border-slate-800 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <KeyRound size={14} className="text-amber-500" />
+                    Cuenta del Administrador del Local
+                  </h4>
+                  {loadingAdminProfile && (
+                    <span className="text-[10px] text-amber-400 flex items-center gap-1">
+                      <Loader2 size={12} className="animate-spin" />
+                      Cargando datos...
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium">Usuario del Administrador</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="admin"
+                      value={editAdminUsername}
+                      onChange={(e) => setEditAdminUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium">Nombre Completo</label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Juan Pérez"
+                      value={editAdminName}
+                      onChange={(e) => setEditAdminName(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-500 font-medium flex items-center justify-between">
+                    <span>Nueva Contraseña (Opcional)</span>
+                    <span className="text-[10px] text-slate-600">Dejar en blanco para no cambiarla</span>
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Escribe una nueva clave (mín. 6 caracteres)"
+                    value={editAdminPassword}
+                    onChange={(e) => setEditAdminPassword(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600"
+                  />
+                </div>
               </div>
 
               <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
